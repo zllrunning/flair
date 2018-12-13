@@ -11,6 +11,7 @@ from deprecated import deprecated
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 from pytorch_pretrained_bert.modeling import BertModel
 
+import flair
 from .nn import LockedDropout, WordDropout
 from .data import Dictionary, Token, Sentence
 from .file_utils import cached_path
@@ -329,7 +330,8 @@ class ELMoEmbeddings(TokenEmbeddings):
             weight_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/contributed/pt/elmo_pt_weights.hdf5'
 
         # put on Cuda if available
-        cuda_device = 0 if torch.cuda.is_available() else -1
+        from flair import device
+        cuda_device = 0 if str(device) == 'cuda' else -1
         self.ee = allennlp.commands.elmo.ElmoEmbedder(options_file=options_file,
                                                       weight_file=weight_file,
                                                       cuda_device=cuda_device)
@@ -428,12 +430,10 @@ class CharacterEmbeddings(TokenEmbeddings):
             for i, c in enumerate(tokens_sorted_by_length):
                 tokens_mask[i, :chars2_length[i]] = c
 
-            tokens_mask = torch.LongTensor(tokens_mask)
+            tokens_mask = torch.LongTensor(tokens_mask, device=flair.device)
 
             # chars for rnn processing
             chars = tokens_mask
-            if torch.cuda.is_available():
-                chars = chars.cuda()
 
             character_embeddings = self.char_embedding(chars).transpose(0, 1)
 
@@ -443,9 +443,7 @@ class CharacterEmbeddings(TokenEmbeddings):
 
             outputs, output_lengths = torch.nn.utils.rnn.pad_packed_sequence(lstm_out)
             outputs = outputs.transpose(0, 1)
-            chars_embeds_temp = torch.FloatTensor(torch.zeros((outputs.size(0), outputs.size(2))))
-            if torch.cuda.is_available():
-                chars_embeds_temp = chars_embeds_temp.cuda()
+            chars_embeds_temp = torch.FloatTensor(torch.zeros((outputs.size(0), outputs.size(2))), device=flair.device)
             for i, index in enumerate(output_lengths):
                 chars_embeds_temp[i] = outputs[i, index - 1]
             character_embeddings = chars_embeds_temp.clone()
@@ -820,12 +818,8 @@ class BertEmbeddings(TokenEmbeddings):
 
         # prepare id maps for BERT model
         features = self._convert_sentences_to_features(sentences, longest_sentence_in_batch)
-        if torch.cuda.is_available():
-            all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long).cuda()
-            all_input_masks = torch.tensor([f.input_mask for f in features], dtype=torch.long).cuda()
-        else:
-            all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
-            all_input_masks = torch.tensor([f.input_mask for f in features], dtype=torch.long)
+        all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long, device=flair.device)
+        all_input_masks = torch.tensor([f.input_mask for f in features], dtype=torch.long, device=flair.device)
 
         # put encoded batch through BERT model to get all hidden states of all encoder layers
         self.model.eval()
@@ -886,8 +880,7 @@ class DocumentMeanEmbeddings(DocumentEmbeddings):
 
         self.__embedding_length: int = self.embeddings.embedding_length
 
-        if torch.cuda.is_available():
-            self.cuda()
+        self.to(flair.device)
 
     @property
     def embedding_length(self) -> int:
@@ -916,9 +909,7 @@ class DocumentMeanEmbeddings(DocumentEmbeddings):
                     token: Token = token
                     word_embeddings.append(token.get_embedding().unsqueeze(0))
 
-                word_embeddings = torch.cat(word_embeddings, dim=0)
-                if torch.cuda.is_available():
-                    word_embeddings = word_embeddings.cuda()
+                word_embeddings = torch.cat(word_embeddings, dim=0, device=flair.device)
 
                 mean_embedding = torch.mean(word_embeddings, 0)
 
@@ -941,8 +932,7 @@ class DocumentPoolEmbeddings(DocumentEmbeddings):
 
         self.__embedding_length: int = self.embeddings.embedding_length
 
-        if torch.cuda.is_available():
-            self.cuda()
+        self.to(flair.device)
 
         self.mode = mode
         if self.mode == 'mean':
@@ -982,9 +972,7 @@ class DocumentPoolEmbeddings(DocumentEmbeddings):
                     token: Token = token
                     word_embeddings.append(token.get_embedding().unsqueeze(0))
 
-                word_embeddings = torch.cat(word_embeddings, dim=0)
-                if torch.cuda.is_available():
-                    word_embeddings = word_embeddings.cuda()
+                word_embeddings = torch.cat(word_embeddings, dim=0, device=flair.device)
 
                 if self.mode == 'mean':
                     pooled_embedding = self.pool_op(word_embeddings, 0)
@@ -1061,8 +1049,7 @@ class DocumentLSTMEmbeddings(DocumentEmbeddings):
 
         torch.nn.init.xavier_uniform_(self.word_reprojection_map.weight)
 
-        if torch.cuda.is_available():
-            self.cuda()
+        self.to(flair.device)
 
     @property
     def embedding_length(self) -> int:
@@ -1113,9 +1100,7 @@ class DocumentLSTMEmbeddings(DocumentEmbeddings):
         # --------------------------------------------------------------------
         # GET REPRESENTATION FOR ENTIRE BATCH
         # --------------------------------------------------------------------
-        sentence_tensor = torch.cat(all_sentence_tensors, 1)
-        if torch.cuda.is_available():
-            sentence_tensor = sentence_tensor.cuda()
+        sentence_tensor = torch.cat(all_sentence_tensors, 1, device=flair.device)
 
         # --------------------------------------------------------------------
         # FF PART
