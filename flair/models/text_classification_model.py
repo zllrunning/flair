@@ -47,8 +47,7 @@ class TextClassifier(flair.nn.Model):
             self.loss_function = nn.CrossEntropyLoss()
 
         # auto-spawn on GPU if available
-        if torch.cuda.is_available():
-            self.cuda()
+        self.to(flair.device)
 
     def _init_weights(self):
         nn.init.xavier_uniform_(self.decoder.weight)
@@ -57,10 +56,7 @@ class TextClassifier(flair.nn.Model):
         self.document_embeddings.embed(sentences)
 
         text_embedding_list = [sentence.get_embedding() for sentence in sentences]
-        text_embedding_tensor = torch.cat(text_embedding_list, 0)
-
-        if torch.cuda.is_available():
-            text_embedding_tensor = text_embedding_tensor.cuda()
+        text_embedding_tensor = torch.cat(text_embedding_list, 0, device=flair.device)
 
         label_scores = self.decoder(text_embedding_tensor)
 
@@ -112,9 +108,7 @@ class TextClassifier(flair.nn.Model):
         )
         model.load_state_dict(state['state_dict'])
         model.eval()
-
-        if torch.cuda.is_available():
-            model = model.cuda()
+        model.to(flair.device)
 
         return model
 
@@ -140,10 +134,7 @@ class TextClassifier(flair.nn.Model):
         # https://docs.python.org/3/library/warnings.html#temporarily-suppressing-warnings
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore")
-            if torch.cuda.is_available():
-                state = torch.load(str(model_file))
-            else:
-                state = torch.load(str(model_file), map_location={'cuda:0': 'cpu'})
+            state = torch.load(str(model_file), map_location=flair.device)
         return state
 
     def forward_loss(self, sentences: Union[List[Sentence], Sentence]) -> torch.tensor:
@@ -242,21 +233,18 @@ class TextClassifier(flair.nn.Model):
     def _labels_to_one_hot(self, sentences: List[Sentence]):
         label_list = [sentence.get_label_names() for sentence in sentences]
         one_hot = convert_labels_to_one_hot(label_list, self.label_dictionary)
-        one_hot = [torch.FloatTensor(l).unsqueeze(0) for l in one_hot]
-        one_hot = torch.cat(one_hot, 0)
-        if torch.cuda.is_available():
-            one_hot = one_hot.cuda()
+        one_hot = [torch.tensor(l, dtype=torch.float, device=flair.device).unsqueeze(0) for l in one_hot]
+        one_hot = torch.cat(one_hot, 0, device=flair.device)
         return one_hot
 
     def _labels_to_indices(self, sentences: List[Sentence]):
         indices = [
-            torch.LongTensor([self.label_dictionary.get_idx_for_item(label.value) for label in sentence.labels])
+            torch.tensor([self.label_dictionary.get_idx_for_item(label.value) for label in sentence.labels],
+                         dtype=torch.long, device=flair.device)
             for sentence in sentences
         ]
 
-        vec = torch.cat(indices, 0)
-        if torch.cuda.is_available():
-            vec = vec.cuda()
+        vec = torch.cat(indices, 0, device=flair.device)
 
         return vec
 
