@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 from typing import Union
 
-from torch.autograd import Variable
 from torch.optim.sgd import SGD
 
 import flair
@@ -87,9 +86,7 @@ class TextCorpus(object):
         if forward:
             # charsplit file content
             with open(path, 'r', encoding="utf-8") as f:
-                i = torch.LongTensor(tokens)
-                a = torch.LongTensor(tokens)
-                ids = torch.tensor(tokens, dtype=torch.long)
+                ids = torch.zeros(tokens, dtype=torch.long, device=flair.device)
                 token = 0
                 for line in f:
                     line = self.random_casechange(line)
@@ -106,7 +103,7 @@ class TextCorpus(object):
         else:
             # charsplit file content
             with open(path, 'r', encoding="utf-8") as f:
-                ids = torch.tensor(tokens, dtype=torch.long)
+                ids = torch.zeros(tokens, dtype=torch.long, device=flair.device)
                 token = tokens - 1
                 for line in f:
                     line = self.random_casechange(line)
@@ -146,7 +143,7 @@ class TextCorpus(object):
 
         # Tokenize file content
         with open(path, 'r') as f:
-            ids = torch.tensor(tokens, dtype=torch.long)
+            ids = torch.zeros(tokens, dtype=torch.long, device=flair.device)
             token = 0
             for line in f:
                 words = line.split() + ['<eos>']
@@ -378,20 +375,21 @@ class LanguageModelTrainer:
         # Trim off any extra elements that wouldn't cleanly fit (remainders).
         data = data.narrow(0, 0, nbatch * batch_size)
         # Evenly divide the data across the bsz batches.
-        data = data.view(batch_size, -1, device=flair.device).t().contiguous()
+        data = data.view(batch_size, -1).t().contiguous()
+        data = data.to(device=flair.device)
         return data
 
     @staticmethod
     def _get_batch(source, i, sequence_length):
         seq_len = min(sequence_length, len(source) - 1 - i)
-        data = Variable(source[i:i + seq_len])
-        target = Variable(source[i + 1:i + 1 + seq_len].view(-1))
+        data = source[i:i + seq_len].clone().detach()
+        target = source[i + 1:i + 1 + seq_len].view(-1).clone().detach()
         return data, target
 
     @staticmethod
     def _repackage_hidden(h):
         """Wraps hidden states in new Variables, to detach them from their history."""
-        return tuple(Variable(v) for v in h)
+        return tuple(v.clone().detach().requires_grad_(True) for v in h)
 
     @staticmethod
     def load_from_checkpoint(checkpoint_file: Path, corpus: TextCorpus, optimizer: Optimizer = SGD):

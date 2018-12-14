@@ -3,7 +3,6 @@ from pathlib import Path
 import torch.nn as nn
 import torch
 import math
-from torch.autograd import Variable
 from typing import List
 
 from torch.optim import Optimizer
@@ -86,8 +85,8 @@ class LanguageModel(nn.Module):
 
     def init_hidden(self, bsz):
         weight = next(self.parameters()).data
-        return (Variable(weight.new(self.nlayers, bsz, self.hidden_size).zero_()),
-                Variable(weight.new(self.nlayers, bsz, self.hidden_size).zero_()))
+        return (weight.new(self.nlayers, bsz, self.hidden_size).zero_().clone().detach(),
+                weight.new(self.nlayers, bsz, self.hidden_size).zero_().clone().detach())
 
     def get_representation(self, strings: List[str], detach_from_lm=True):
 
@@ -108,7 +107,7 @@ class LanguageModel(nn.Module):
     def repackage_hidden(self, h):
         """Wraps hidden states in new Variables, to detach them from their history."""
         if type(h) == torch.Tensor:
-            return Variable(h.data)
+            return torch.tensor(h.data)
         else:
             return tuple(self.repackage_hidden(v) for v in h)
 
