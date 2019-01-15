@@ -144,7 +144,7 @@ class StackedEmbeddings(TokenEmbeddings):
 class WordEmbeddings(TokenEmbeddings):
     """Standard static word embeddings, such as GloVe or FastText."""
 
-    def __init__(self, embeddings: str):
+    def __init__(self, embeddings: str, field: str = None):
         """
         Initializes classic word embeddings. Constructor downloads required files if not there.
         :param embeddings: one of: 'glove', 'extvec', 'crawl' or two-letter language code.
@@ -206,6 +206,8 @@ class WordEmbeddings(TokenEmbeddings):
 
         self.precomputed_word_embeddings = gensim.models.KeyedVectors.load(str(embeddings))
 
+        self.field = field
+
         self.__embedding_length: int = self.precomputed_word_embeddings.vector_size
         super().__init__()
 
@@ -220,14 +222,19 @@ class WordEmbeddings(TokenEmbeddings):
             for token, token_idx in zip(sentence.tokens, range(len(sentence.tokens))):
                 token: Token = token
 
-                if token.text in self.precomputed_word_embeddings:
-                    word_embedding = self.precomputed_word_embeddings[token.text]
-                elif token.text.lower() in self.precomputed_word_embeddings:
-                    word_embedding = self.precomputed_word_embeddings[token.text.lower()]
-                elif re.sub(r'\d', '#', token.text.lower()) in self.precomputed_word_embeddings:
-                    word_embedding = self.precomputed_word_embeddings[re.sub(r'\d', '#', token.text.lower())]
-                elif re.sub(r'\d', '0', token.text.lower()) in self.precomputed_word_embeddings:
-                    word_embedding = self.precomputed_word_embeddings[re.sub(r'\d', '0', token.text.lower())]
+                if 'field' not in self.__dict__ or self.field is None:
+                    word = token.text
+                else:
+                    word = token.get_tag(self.field).value
+
+                if word in self.precomputed_word_embeddings:
+                    word_embedding = self.precomputed_word_embeddings[word]
+                elif word.lower() in self.precomputed_word_embeddings:
+                    word_embedding = self.precomputed_word_embeddings[word.lower()]
+                elif re.sub(r'\d', '#', word.lower()) in self.precomputed_word_embeddings:
+                    word_embedding = self.precomputed_word_embeddings[re.sub(r'\d', '#', word.lower())]
+                elif re.sub(r'\d', '0', word.lower()) in self.precomputed_word_embeddings:
+                    word_embedding = self.precomputed_word_embeddings[re.sub(r'\d', '0', word.lower())]
                 else:
                     word_embedding = np.zeros(self.embedding_length, dtype='float')
 
@@ -785,85 +792,6 @@ class PooledFlairEmbeddings(TokenEmbeddings):
         return self.embedding_length
 
 
-class ELMoEmbeddings(TokenEmbeddings):
-    """Contextual word embeddings using word-level LM, as proposed in Peters et al., 2018."""
-
-    def __init__(self, model: str = 'original'):
-        super().__init__()
-
-        try:
-            import allennlp.commands.elmo
-        except:
-            print('\n\n----------------------------------------')
-            print('ACHTUNG! The library "allennlp" is not installed!\n')
-            print('To use ELMoEmbeddings, please first install with "pip install allennlp"')
-            print('----------------------------------------\n\n')
-            pass
-
-        self.name = 'elmo-' + model
-        self.static_embeddings = True
-
-        # the default model for ELMo is the 'original' model, which is very large
-        options_file = allennlp.commands.elmo.DEFAULT_OPTIONS_FILE
-        weight_file = allennlp.commands.elmo.DEFAULT_WEIGHT_FILE
-        # alternatively, a small, medium or portuguese model can be selected by passing the appropriate mode name
-        if model == 'small':
-            options_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_options.json'
-            weight_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x1024_128_2048cnn_1xhighway/elmo_2x1024_128_2048cnn_1xhighway_weights.hdf5'
-        if model == 'medium':
-            options_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x2048_256_2048cnn_1xhighway/elmo_2x2048_256_2048cnn_1xhighway_options.json'
-            weight_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x2048_256_2048cnn_1xhighway/elmo_2x2048_256_2048cnn_1xhighway_weights.hdf5'
-        if model == 'pt' or model == 'portuguese':
-            options_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/contributed/pt/elmo_pt_options.json'
-            weight_file = 'https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/contributed/pt/elmo_pt_weights.hdf5'
-
-        # put on Cuda if available
-        cuda_device = 0 if torch.cuda.is_available() else -1
-        self.ee = allennlp.commands.elmo.ElmoEmbedder(options_file=options_file,
-                                                      weight_file=weight_file,
-                                                      cuda_device=cuda_device)
-
-        # embed a dummy sentence to determine embedding_length
-        dummy_sentence: Sentence = Sentence()
-        dummy_sentence.add_token(Token('hello'))
-        embedded_dummy = self.embed(dummy_sentence)
-        self.__embedding_length: int = len(embedded_dummy[0].get_token(1).get_embedding())
-
-    @property
-    def embedding_length(self) -> int:
-        return self.__embedding_length
-
-    def _add_embeddings_internal(self, sentences: List[Sentence]) -> List[Sentence]:
-
-        sentence_words: List[List[str]] = []
-        for sentence in sentences:
-            sentence_words.append([token.text for token in sentence])
-
-        embeddings = self.ee.embed_batch(sentence_words)
-
-        for i, sentence in enumerate(sentences):
-
-            sentence_embeddings = embeddings[i]
-
-            for token, token_idx in zip(sentence.tokens, range(len(sentence.tokens))):
-                token: Token = token
-
-                embedding = torch.cat([torch.FloatTensor(sentence_embeddings[0, token_idx, :]),
-                                       torch.FloatTensor(sentence_embeddings[1, token_idx, :]),
-                                       torch.FloatTensor(sentence_embeddings[2, token_idx, :])], 0)
-
-                word_embedding = torch.autograd.Variable(embedding)
-                token.set_embedding(self.name, word_embedding)
-
-        return sentences
-
-    def extra_repr(self):
-        return 'model={}'.format(self.name)
-
-    def __str__(self):
-        return self.name
-
-
 class BertEmbeddings(TokenEmbeddings):
 
     def __init__(self,
@@ -967,6 +895,8 @@ class BertEmbeddings(TokenEmbeddings):
             all_input_masks = torch.tensor([f.input_mask for f in features], dtype=torch.long)
 
         # put encoded batch through BERT model to get all hidden states of all encoder layers
+        if torch.cuda.is_available():
+            self.model.cuda()
         self.model.eval()
         all_encoder_layers, _ = self.model(all_input_ids, token_type_ids=None, attention_mask=all_input_masks)
 
@@ -1400,7 +1330,7 @@ class DocumentPoolEmbeddings(DocumentEmbeddings):
                 else:
                     pooled_embedding, _ = self.pool_op(word_embeddings, 0)
 
-                sentence.set_embedding(self.name, pooled_embedding.unsqueeze(0))
+                sentence.set_embedding(self.name, pooled_embedding)
 
     def _add_embeddings_internal(self, sentences: List[Sentence]):
         pass
@@ -1551,12 +1481,12 @@ class DocumentLSTMEmbeddings(DocumentEmbeddings):
         # EXTRACT EMBEDDINGS FROM LSTM
         # --------------------------------------------------------------------
         for sentence_no, length in enumerate(lengths):
-            last_rep = outputs[length - 1, sentence_no].unsqueeze(0)
+            last_rep = outputs[length - 1, sentence_no]
 
             embedding = last_rep
             if self.bidirectional:
-                first_rep = outputs[0, sentence_no].unsqueeze(0)
-                embedding = torch.cat([first_rep, last_rep], 1)
+                first_rep = outputs[0, sentence_no]
+                embedding = torch.cat([first_rep, last_rep], 0)
 
             sentence = sentences[sentence_no]
             sentence.set_embedding(self.name, embedding)
@@ -1566,23 +1496,22 @@ class DocumentLSTMEmbeddings(DocumentEmbeddings):
 
 
 class DocumentLMEmbeddings(DocumentEmbeddings):
-    def __init__(self, charlm_embeddings: List[CharLMEmbeddings], detach: bool = True):
+    def __init__(self, flair_embeddings: List[FlairEmbeddings], detach: bool = True):
         super().__init__()
 
-        self.embeddings = charlm_embeddings
+        self.embeddings = flair_embeddings
+        self.name = 'document_lm'
 
         self.static_embeddings = detach
         self.detach = detach
 
-        dummy: Sentence = Sentence('jo')
-        self.embed([dummy])
-        self._embedding_length: int = len(dummy.embedding)
+        self._embedding_length: int = sum(embedding.embedding_length for embedding in flair_embeddings)
 
     @property
     def embedding_length(self) -> int:
         return self._embedding_length
 
-    def embed(self, sentences: Union[List[Sentence], Sentence]):
+    def _add_embeddings_internal(self, sentences: List[Sentence]):
         if type(sentences) is Sentence:
             sentences = [sentences]
 
@@ -1599,6 +1528,3 @@ class DocumentLMEmbeddings(DocumentEmbeddings):
                     sentence.set_embedding(embedding.name, sentence[1]._embeddings[embedding.name])
 
         return sentences
-
-    def _add_embeddings_internal(self, sentences: List[Sentence]):
-        pass
